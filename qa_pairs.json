@@ -1,0 +1,18 @@
+[
+  {
+    "question": "hello",
+    "answer": "Hello, how are you."
+  },
+  {
+    "question": "i am good what about you",
+    "answer": "I am doing great, tell me about yourself."
+  },
+  {
+    "question": "hey",
+    "answer": "hey, how are you ?"
+  },
+  {
+    "question": "i am good, what about you ?",
+    "answer": "I am doing great!"
+  }
+]
