@@ -1,19 +1,62 @@
-require('dotenv').config();
-const {REST, Routes, DefaultWebSocketManagerOptions} = require('discord.js');
+import 'dotenv/config';
+import { REST, Routes, DefaultWebSocketManagerOptions } from 'discord.js';
 
 const commands = [
-    {
-        name: 'intro',
-        description: 'Bot tell about itself'
-    },
-    {
-        name: 'ping',
-        description: 'it will ping you'
-    },
-    {
-        name: 'Quote',
-        description: 'It will provide you motivational quote'
-    }
+  {
+    name: 'intro',
+    description: 'Bot tells about itself'
+  },
+  {
+    name: 'ping',
+    description: 'It will ping you'
+  },
+  {
+    name: 'quote',
+    description: 'It will provide you a motivational quote'
+  }
+  ,
+  {
+    name: 'warn',
+    description: 'Warn a user',
+    options: [
+      {
+        name: 'user',
+        description: 'User to warn',
+        type: 6, // USER type
+        required: true
+      },
+      {
+        name: 'reason',
+        description: 'Reason for warning',
+        type: 3, // STRING type
+        required: false
+      }
+    ]
+  }
+  ,
+  {
+    name: 'config',
+    description: 'Configure bot features',
+    options: [
+      {
+        name: 'feature',
+        description: 'Feature to configure',
+        type: 3, // STRING
+        required: true,
+        choices: [
+          { name: 'welcome', value: 'welcomeEnabled' },
+          { name: 'warn', value: 'warnEnabled' },
+          { name: 'quote', value: 'quoteEnabled' }
+        ]
+      },
+      {
+        name: 'enabled',
+        description: 'Enable or disable the feature',
+        type: 5, // BOOLEAN
+        required: true
+      }
+    ]
+  }
 ];
 
 const rest = new REST( { version: '10' } ).setToken(process.env.TOKEN);
