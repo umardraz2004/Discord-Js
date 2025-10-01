@@ -1,9 +1,14 @@
-// https://github.com/notunderctrl/discordjs-v14-series
-// https://discord.com/oauth2/authorize?client_id=1237093673234202745&permissions=8&scope=bot+applications.commands
+// index.js
 import "dotenv/config";
-import { Client, IntentsBitField, EmbedBuilder } from "discord.js";
+import { Client, IntentsBitField } from "discord.js";
 import fs from "fs";
-const config = JSON.parse(fs.readFileSync("./config.json", "utf8"));
+import fetch from "node-fetch";
+
+// ===== Load Config =====
+const CONVO_FILE = "./conversations.json";
+const HISTORY_LIMIT = 5;
+
+// ===== Discord Client =====
 const client = new Client({
   intents: [
     IntentsBitField.Flags.Guilds,
@@ -12,218 +17,127 @@ const client = new Client({
     IntentsBitField.Flags.MessageContent,
   ],
 });
-// Welcome new members with a beautiful embed
-// Log when the bot is online
-client.on('ready', () => {
-  console.log(`✅ ${client.user.tag} is online.`);
-});
-client.on("guildMemberAdd", (member) => {
-  if (!config.welcomeEnabled) return;
-  const channel = member.guild.systemChannel;
-  if (channel) {
-    const welcomeEmbed = new EmbedBuilder()
-      .setColor(0x1abc9c)
-      .setTitle("✨ Welcome to the Family! ✨")
-      .setDescription(
-        `👋 **Hey ${member.user.username}!**\n\n` +
-        `Welcome to **${member.guild.name}**!\n\n` +
-        `We're so glad to have you here. Make sure to check out the rules and introduce yourself!\n\n` +
-        `🎈 **Enjoy your stay and have fun!** 🎈`
-      )
-      .addFields(
-        {
-          name: "🕒 Joined at",
-          value: `<t:${Math.floor(member.joinedTimestamp / 1000)}:F>`,
-          inline: true,
-        },
-        {
-          name: "👥 Member Count",
-          value: `${member.guild.memberCount}`,
-          inline: true,
-        },
-        { name: "⭐ Tip", value: "Invite your friends and make new ones here!" }
-      )
-      .setImage(
-        "https://cdn.discordapp.com/attachments/110000000000000000/110000000000000000/banner.png"
-      )
-      .setFooter({
-        text: `Welcome ${member.user.tag}! | User ID: ${member.id}`,
-      });
-    channel.send({
-      content: `🎊 **A new member has joined!** 🎊\n<@${member.id}>`,
-      embeds: [welcomeEmbed],
-    });
-  }
-});
-// Message handler for OpenAI replies
-client.on("messageCreate", async (msg) => {
-  const message = msg.content.toLowerCase();
-  if (msg.author.bot) return;
 
-  // Store normal chat messages in chat_log.json as objects
-  import("fs").then((fs) => {
-    fs.readFile("chat_log.json", "utf8", (err, data) => {
-      let logs = [];
-      if (!err && data) {
-        try { logs = JSON.parse(data); } catch {}
+// ===== Memory Handling =====
+const conversations = new Map();
+
+// Load memory from file
+function loadConversations() {
+  if (fs.existsSync(CONVO_FILE)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(CONVO_FILE, "utf8"));
+      for (const [userId, history] of Object.entries(data)) {
+        conversations.set(userId, history);
       }
-      logs.push({ username: msg.author.username, message: msg.content });
-      fs.writeFile("chat_log.json", JSON.stringify(logs, null, 2), () => {});
-    });
+      console.log("💾 Conversations loaded.");
+    } catch (err) {
+      console.error("⚠️ Failed to load conversations:", err);
+    }
+  }
+}
+
+// Save memory to file
+function saveConversations() {
+  const obj = {};
+  for (const [userId, history] of conversations.entries()) {
+    obj[userId] = history.slice(-HISTORY_LIMIT);
+  }
+  fs.writeFileSync(CONVO_FILE, JSON.stringify(obj, null, 2));
+}
+
+// ===== Ollama Ask Function =====
+async function askLlama(userId, prompt) {
+  if (!conversations.has(userId)) {
+    conversations.set(userId, []);
+  }
+
+  const history = conversations.get(userId);
+
+  // Add user message
+  history.push({ role: "user", content: prompt });
+
+  // Build context (only last N messages)
+  const context = history
+    .slice(-HISTORY_LIMIT)
+    .map((m) => `${m.role === "user" ? "User" : "Bot"}: ${m.content}`)
+    .join("\n");
+
+  const response = await fetch("http://127.0.0.1:11434/api/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "llama2", // ⚡ switch to "llama2:7b" for faster but less smart
+      prompt: context + `\nBot:`,
+    }),
   });
 
-  // Teach the bot: "teach: question | answer"
-  if (message.startsWith("teach:")) {
-    const parts = msg.content.slice(6).split("|");
-    if (parts.length === 2) {
-      const question = parts[0].trim().toLowerCase();
-      const answer = parts[1].trim();
-      import("fs").then((fs) => {
-        fs.readFile("qa_pairs.json", "utf8", (err, data) => {
-          let pairs = [];
-          if (!err && data) {
-            try { pairs = JSON.parse(data); } catch {}
-          }
-          pairs.push({ question, answer });
-          fs.writeFile("qa_pairs.json", JSON.stringify(pairs, null, 2), () => {});
-        });
-      });
-      msg.reply("Learned new Q&A pair!");
-    } else {
-      msg.reply("Format: teach: question | answer");
+  let fullReply = "";
+
+  // ✅ Proper streaming handling
+  for await (const chunk of response.body) {
+    const lines = chunk.toString().split("\n");
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed.response) {
+          fullReply += parsed.response;
+        }
+      } catch {
+        // ignore partial JSON errors
+      }
     }
-    return;
   }
 
-  // Only reply if bot is mentioned/tagged
-  if (msg.mentions.has(client.user)) {
-    let cleanMsg = msg.content.replace(new RegExp(`<@!?${client.user.id}>`, 'g'), '').trim();
-    import("fs").then((fs) => {
-      fs.readFile("qa_pairs.json", "utf8", (err, data) => {
-        let pairs = [];
-        if (!err && data) {
-          try { pairs = JSON.parse(data); } catch {}
-        }
-        // Find all answers for matching questions
-        let matchedAnswers = [];
-        for (const pair of pairs) {
-          if (cleanMsg.includes(pair.question)) {
-            if (Array.isArray(pair.answer)) {
-              matchedAnswers.push(...pair.answer);
-            } else {
-              matchedAnswers.push(pair.answer);
-            }
-          }
-        }
-        // If multiple answers, analyze user's previous messages for context
-        if (matchedAnswers.length > 1) {
-          fs.readFile("chat_log.json", "utf8", (err2, chatData) => {
-            let logs = [];
-            if (!err2 && chatData) {
-              try { logs = JSON.parse(chatData); } catch {}
-            }
-            // Get last 5 messages from this user
-            const userMessages = logs.filter(l => l.username === msg.author.username).slice(-5).map(l => l.message).join(' ').toLowerCase();
-            // Score each answer by keyword overlap
-            let bestAnswer = matchedAnswers[0];
-            let bestScore = 0;
-            for (const ans of matchedAnswers) {
-              let score = 0;
-              const ansWords = ans.toLowerCase().split(/\s+/);
-              for (const word of ansWords) {
-                if (userMessages.includes(word)) score++;
-              }
-              if (score > bestScore) {
-                bestScore = score;
-                bestAnswer = ans;
-              }
-            }
-            msg.reply(bestAnswer);
-          });
-        } else if (matchedAnswers.length === 1) {
-          msg.reply(matchedAnswers[0]);
-        } else {
-          // If no Q&A match, search chat_log.json for a relevant reply
-          fs.readFile("chat_log.json", "utf8", (err2, chatData) => {
-            let logs = [];
-            if (!err2 && chatData) {
-              try { logs = JSON.parse(chatData); } catch {}
-            }
-            // Find a message from another user that matches the question
-            let bestReply = null;
-            for (const log of logs.reverse()) {
-              if (log.username !== msg.author.username && log.message.toLowerCase().includes(cleanMsg)) {
-                bestReply = log.message;
-                break;
-              }
-            }
-            if (bestReply) {
-              msg.reply(bestReply);
-            } else {
-              msg.reply("I don't know about that. Teach me with: teach: question | answer");
-            }
-          });
-        }
-      });
-    });
-  }
+  // Save bot reply
+  history.push({ role: "bot", content: fullReply.trim() });
+
+  // Persist to file
+  saveConversations();
+
+  return fullReply.trim();
+}
+
+// ===== Discord Events =====
+client.on("ready", () => {
+  console.log(`✅ ${client.user.tag} is online.`);
+  loadConversations();
 });
-client.on("interactionCreate", async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
 
-  if (interaction.commandName === "intro") {
-    return interaction.reply("Hello! I'm your bot. Ask me anything or use /config to change features.");
-  }
+client.on("messageCreate", async (message) => {
+  if (message.author.bot) return;
 
-  if (interaction.commandName === "ping") {
-    return interaction.reply("pong!");
-  }
+  const isAskCommand = message.content.startsWith("!ask");
+  const isMention = message.mentions.has(client.user);
+  const isReplyToBot =
+    message.reference &&
+    (await message.channel.messages.fetch(message.reference.messageId))?.author
+      .id === client.user.id;
 
-  if (interaction.commandName === "quote") {
-    return interaction.reply('"Success is not final, failure is not fatal: It is the courage to continue that counts." – Winston Churchill');
-  }
+  if (isAskCommand || isMention || isReplyToBot) {
+    const prompt = isAskCommand
+      ? message.content.replace("!ask", "").trim()
+      : message.content.replace(`<@${client.user.id}>`, "").trim();
 
-  if (interaction.commandName === "warn") {
-    const user = interaction.options.getUser("user");
-    const reason = interaction.options.getString("reason") || "No reason provided.";
-    if (!user) {
-      return interaction.reply({ content: "You must specify a user to warn.", ephemeral: true });
-    }
-    return interaction.reply(`⚠️ ${user} has been warned. Reason: ${reason}`);
-  }
+    if (!prompt) return message.reply("❌ Please provide a question.");
 
-  if (interaction.commandName === "config") {
-    const feature = interaction.options.getString("feature");
-    const enabled = interaction.options.getBoolean("enabled");
-    if (!["welcomeEnabled", "warnEnabled", "quoteEnabled"].includes(feature)) {
-      return await interaction.reply({
-        content: "Invalid feature.",
-        ephemeral: true,
-      });
-    }
-    config[feature] = enabled;
+    const thinking = await message.reply("🤔 Thinking...");
+
     try {
-      await fs.promises.writeFile(
-        "./config.json",
-        JSON.stringify(config, null, 2)
-      );
-      await interaction.reply({
-        content: `Feature \`${feature}\` has been set to \`${enabled}\`.`,
-        ephemeral: true,
-      });
+      const reply = await askLlama(message.author.id, prompt);
+      await thinking.edit(reply || "⚠️ I couldn’t generate a reply.");
     } catch (err) {
-      await interaction.reply({
-        content: "Failed to update config file.",
-        ephemeral: true,
-      });
+      console.error("Error talking to Ollama:", err);
+      await thinking.edit("⚠️ Error getting a response from LLaMA.");
     }
   }
 });
 
-// Login at the top level, not inside any event handler
-client.login(process.env.TOKEN)
-  .then(() => console.log('Bot login successful!'))
-  .catch(err => {
-    console.error('Bot login failed:', err);
+// ===== Start Bot =====
+client
+  .login(process.env.TOKEN)
+  .then(() => console.log("✅ Bot login successful!"))
+  .catch((err) => {
+    console.error("❌ Bot login failed:", err);
     process.exit(1);
   });

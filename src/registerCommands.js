@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { REST, Routes, DefaultWebSocketManagerOptions } from 'discord.js';
+import { REST, Routes } from 'discord.js';
 
 const commands = [
   {
